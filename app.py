@@ -142,7 +142,9 @@ tax_rate = float(settings.get("tax_rate", 0.10))
 # メニュー
 # =========================
 page = st.sidebar.radio("メニュー", ["計算", "履歴", "グラフ", "設定"])
-
+st.sidebar.info(
+    "※ 公開版は環境の都合で履歴CSVが消えることがあります。必要なら『履歴』ページのCSVダウンロードをご利用ください。"
+)
 
 # =========================
 # 計算ページ
@@ -267,27 +269,117 @@ elif page == "履歴":
 # グラフページ
 # =========================
 elif page == "グラフ":
-    st.subheader("グラフ（発信映え）")
+    st.subheader("グラフ（発信向け）")
 
-    # 表示件数を選べるように（発信向けは10〜20が見やすい）
-    n = st.slider("表示する履歴件数", min_value=5, max_value=50, value=15, step=1)
+    n = st.slider("表示する履歴件数", min_value=5, max_value=100, value=30, step=1)
+
+    rows = read_history_rows()
+    if not rows:
+        st.caption("履歴がありません。計算ページで保存すると出ます。")
+        st.stop()
+
+    recent = rows[-n:]
 
     # -------------------------
-    # ① セッション内の価格（今入力してるやつ）
+    # ① 日時付き：合計の推移
     # -------------------------
-    st.write("① いま入力している価格（セッション内）")
-    if not st.session_state.prices:
-        st.caption("価格が入っていません。計算ページで追加してください。")
-    else:
-        fig = plt.figure()
-        plt.plot(st.session_state.prices, marker="o")
-        plt.title("Prices (current session)")
-        plt.xlabel("Index")
-        plt.ylabel("Price")
-        plt.grid(True, linewidth=0.3)
-        st.pyplot(fig)
+    st.write("① 合計の推移（日時ラベル付き）")
+
+    x_labels = []
+    totals = []
+    for r in recent:
+        dt = r.get("datetime", "")
+        label = dt[5:16] if len(dt) >= 16 else dt  # 01-31 23:10
+        x_labels.append(label)
+        try:
+            totals.append(float(r.get("total", 0)))
+        except Exception:
+            totals.append(0.0)
+
+    fig1 = plt.figure()
+    plt.plot(totals, marker="o")
+    plt.title("Total trend (recent)")
+    plt.xlabel("DateTime")
+    plt.ylabel("Total")
+    plt.grid(True, linewidth=0.3)
+    plt.xticks(range(len(x_labels)), x_labels, rotation=45, ha="right")
+    plt.tight_layout()
+    st.pyplot(fig1)
 
     st.divider()
+
+    # -------------------------
+    # ② 日別合計：1日単位でまとめる（発信映え）
+    # -------------------------
+    st.write("② 日別合計（発信向け）")
+
+    day_totals = {}
+    for r in recent:
+        dt = r.get("datetime", "")
+        day = dt[:10] if len(dt) >= 10 else dt  # YYYY-MM-DD
+        try:
+            t = float(r.get("total", 0))
+        except Exception:
+            t = 0.0
+        day_totals[day] = day_totals.get(day, 0.0) + t
+
+    days = sorted(day_totals.keys())
+    values = [day_totals[d] for d in days]
+
+    fig2 = plt.figure()
+    plt.plot(values, marker="o")
+    plt.title("Daily total (recent)")
+    plt.xlabel("Date")
+    plt.ylabel("Total")
+    plt.grid(True, linewidth=0.3)
+    plt.xticks(range(len(days)), days, rotation=45, ha="right")
+    plt.tight_layout()
+    st.pyplot(fig2)
+
+    st.divider()
+
+    # -------------------------
+    # ③ カテゴリ別：円グラフ（メモの「カテゴリ: 内容」から作る）
+    # -------------------------
+    st.write("③ カテゴリ別（円グラフ）")
+    st.caption("メモを「食費: スーパー」のように入力するとカテゴリ集計できます。")
+
+    cat_totals = {}
+    for r in recent:
+        memo = (r.get("memo", "") or "").strip()
+        # カテゴリ抽出： ":" の左側
+        if ":" in memo:
+            cat = memo.split(":", 1)[0].strip()
+        else:
+            cat = "(カテゴリなし)"
+        if cat == "":
+            cat = "(カテゴリなし)"
+
+        try:
+            t = float(r.get("total", 0))
+        except Exception:
+            t = 0.0
+
+        cat_totals[cat] = cat_totals.get(cat, 0.0) + t
+
+    # 上位10カテゴリまで（見やすさ）
+    items = sorted(cat_totals.items(), key=lambda x: x[1], reverse=True)[:10]
+    labels = [k for k, _ in items]
+    sizes = [v for _, v in items]
+
+    fig3 = plt.figure()
+    plt.pie(sizes, labels=labels, autopct="%1.1f%%")
+    plt.title("Share by category (top 10)")
+    plt.tight_layout()
+    st.pyplot(fig3)
+
+    st.divider()
+
+    # -------------------------
+    # ④ スクショ用：データ表（メモ確認）
+    # -------------------------
+    st.write("④ スクショ用：履歴一覧（直近）")
+    st.dataframe(recent, use_container_width=True)
 
     # -------------------------
     # ② 履歴：日時ラベル付きの合計推移
